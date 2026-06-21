@@ -165,7 +165,13 @@ struct Config {
     int32_t deviceId{-1};
     size_t timeoutMs{60000};
     std::vector<uint64_t> tensorSizeList{};
+    uint32_t loadQueueDepth{524288};
+    uint32_t dumpQueueDepth{8192};
+    uint32_t hostBufPoolSize{1024};
+    size_t streamNumber{4};
+    std::vector<ssize_t> cpuAffinityCores{};
     size_t localRankSize{1};
+    std::string uniqueId{};
     uint64_t shareBufferCapacity{64ULL << 30};
     size_t shareBufferNumber{0};
     bool ioDirect{false};
@@ -175,6 +181,7 @@ struct Config {
 
 职责：
 - 保存从 `Detail::Dictionary` 解析出的 Yuanrong、设备、队列和 backend 配置。
+- `loadQueueDepth/dumpQueueDepth/hostBufPoolSize/streamNumber` 使用内部默认值，不增加必填用户配置。
 - `shareBufferNumber` 由 `shareBufferCapacity / sum(tensorSizeList)` 推导，表示共享 miss buffer 能容纳多少个 block。
 - `storeBackend` 来自 `PipelineStore.Stack()` 注入的 `store_backend`，在 `"Yuanrong|Posix"` 中指向 Posix。
 
@@ -597,7 +604,7 @@ DumpQueue 负责 Yuanrong 写入和 Posix 归档两条路径。Posix 所需的 D
 1. 构造 Yuanrong key、目标设备地址和 `DeviceBlobList`。
 2. 调用 `MGetH2D`，将 Yuanrong 中命中的 KV cache 直接回填到设备地址，并通过 `failedKeys` 收集 miss。
 3. 全部命中时，将 UCM Load 任务标记完成。
-4. 存在 miss 且没有 Posix backend 时，将 UCM Load 任务标记失败。
+4. 存在 miss 且没有 Posix backend 时，结束当前 Load 任务，不写入 `failureSet`，由上层按未命中路径重算。
 5. 单 rank 或未启用共享 miss 时，从 `HostBufferPool` 申请 host buffer，提交 `PosixStore::Load()`。
 6. Posix 回源完成后，通过 `CopyStream` 将 host buffer H2D scatter 到对应设备地址，释放 host buffer。
 7. 多 rank 共享 miss 时，各 rank 通过 `ShareBuffer::MakeReader()` 竞争 owner；owner rank 负责从 Posix 回源到共享 buffer。
@@ -664,7 +671,7 @@ sequenceDiagram
         LQ->>Pool: Release host buffers
         LQ->>TM: mark task success or failure
     else miss and no backend
-        LQ->>TM: mark task failure
+        LQ->>TM: complete task and let upper layer recompute
     end
 
     UCM->>Pipe: Wait(task handle)
@@ -673,7 +680,7 @@ sequenceDiagram
     TM-->>Store: final status
 ```
 
-LoadQueue 负责两级 load：先用 `MGetH2D` 从 Yuanrong host 对象直接回填设备地址；对 `failedKeys` 构造 miss-only 任务。`local_rank_size > 1` 且存在 Posix backend 时，miss 交给 `ShareLoadQueue`，同节点只让一个 rank 从 Posix 回源到 `ShareBuffer`，其他 rank 等共享 block ready 后各自 H2D 到目标设备地址。未启用共享 miss 时，使用私有 `HostBufferPool` 从 Posix 拉到 host buffer，再通过 `CopyStream` H2D scatter。没有 backend 时，miss 标记当前 UCM task 失败，上层按既有逻辑重算或处理错误。
+LoadQueue 负责两级 load：先用 `MGetH2D` 从 Yuanrong host 对象直接回填设备地址；对 `failedKeys` 构造 miss-only 任务。`local_rank_size > 1` 且存在 Posix backend 时，miss 交给 `ShareLoadQueue`，同节点只让一个 rank 从 Posix 回源到 `ShareBuffer`，其他 rank 等共享 block ready 后各自 H2D 到目标设备地址。未启用共享 miss 时，使用私有 `HostBufferPool` 从 Posix 拉到 host buffer，再通过 `CopyStream` H2D scatter。没有 backend 时，结束当前 Load 任务且不写入 `failureSet`，由上层按未命中路径重算。
 
 ## 7、构建设计
 
@@ -826,5 +833,5 @@ config["share_buffer_capacity_gb"] = 64
    - YuanrongStore 不维护注册表，也不伪造不存在的 register 语义；设备地址在每次 `MSetD2H/MGetH2D` 调用中通过 `DeviceBlobList` 传入。
 
 6. **fallback 语义要明确**
-   - `Yuanrong` standalone miss 返回失败，让上层重算。
+   - `Yuanrong` standalone miss 结束当前 Load，不写入 `failureSet`，由上层重算。
    - `Yuanrong|Posix` miss 尝试 backend。
