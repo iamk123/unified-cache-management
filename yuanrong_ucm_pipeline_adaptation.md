@@ -2,7 +2,7 @@
 
 ## 1、背景与动机
 
-UCM 通过 `UcmPipelineStore` 组合不同存储层，将 KV cache 从设备内存逐级下沉到外部缓存和落盘后端。Yuanrong 接入后作为 UCM 的二级缓存池，负责保存和回填设备侧 KV cache；
+UCM 通过 `UcmPipelineStore` 组合不同存储层，将 KV cache 从设备内存逐级下沉到外部缓存和落盘后端。Yuanrong 接入后作为 UCM 的二级缓存池，负责保存和回填设备侧 KV cache。
 
 `Yuanrong|Posix` 通过 `PipelineStore.Stack()` 叠加 Posix 后端，形成设备内存 -> Yuanrong 二级缓存 -> Posix 三级落盘的层级。Yuanrong 命中时通过 `MGetH2D` 直接回填设备地址；Yuanrong miss 时从 Posix 回源；dump 时写入 Yuanrong，并归档到 Posix。
 
@@ -135,7 +135,7 @@ YuanrongStore
     -> CopyStream : backend host buffer 与 device tensor 之间的 H2D/D2H scatter/gather
 ```
 
-这样 `Yuanrong|Posix` 的协同过程与 Mooncake 的 `dump_queue/load_queue/share_load_queue` 同构：Yuanrong 是高速主路径，Posix 是 miss fallback 和归档层，同节点多 rank miss 时通过共享 host buffer 减少重复 Posix 回源，UCM 对外仍然拿到异步 `TaskHandle`。
+`Yuanrong|Posix` 中，Yuanrong 是高速主路径，Posix 是 miss fallback 和归档层；`DumpQueue`、`LoadQueue` 和 `ShareLoadQueue` 负责两级存储协同，同节点多 rank miss 通过共享 host buffer 减少重复 Posix 回源，UCM 对外保持异步 `TaskHandle` 语义。
 
 
 
@@ -145,7 +145,7 @@ YuanrongStore
 | ----------------------------- | -------------------------------------------------- | ------------------------------------------------------------ |
 | `Setup(config)`               | `HeteroClient(connectOpts).Init()`                 | 从 UCM config 构造 `datasystem::ConnectOptions`              |
 | `Lookup(blocks, num)`         | `Exist(keys, exists)`                              | 将 UCM `BlockId + shard_index` 转为 Yuanrong key；lookup 通常查 shard `0` |
-| `LookupOnPrefix(blocks, num)` | `Exist(keys, exists)` + optional backend lookup    | 与 MooncakeStore 的 prefix 语义一致：先查 Yuanrong，首次 miss 后查询 backend |
+| `LookupOnPrefix(blocks, num)` | `Exist(keys, exists)` + optional backend lookup    | 先查询 Yuanrong；出现首次 miss 后，从对应位置继续查询 backend 的连续命中长度 |
 | `Load(TaskDesc)`              | `MGetH2D(keys, devBlobLists, failedKeys, timeout)` | Yuanrong 从 host 对象读取并 H2D 写入 UCM 提供的设备地址；miss 通过 Posix 回源 |
 | `Dump(TaskDesc)`              | `MSetD2H(keys, devBlobLists, setParam)`            | Yuanrong 从 UCM 设备地址 D2H 写入 host 对象                  |
 | `Check/Wait`                  | UCM `TaskWrapper` + queue waiter                   | 使用 `TransManager/LoadQueue/DumpQueue` 异步任务模型         |
