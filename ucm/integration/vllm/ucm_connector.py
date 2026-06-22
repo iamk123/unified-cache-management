@@ -558,6 +558,7 @@ class UCMDirectConnector(KVConnectorBase_V1):
         )
 
         self.store = self._create_store(self.kv_cache_layout, store_cores)
+        self._register_kv_cache_memory()
 
         if worker_cores:
             try:
@@ -568,6 +569,13 @@ class UCMDirectConnector(KVConnectorBase_V1):
 
         if self.device is None:
             raise RuntimeError(f"Unsupported device platform for UCMDirectConnector.")
+
+    def _register_kv_cache_memory(self):
+        base_ptrs = self.kv_cache_layout.base_ptrs.reshape(-1)
+        buffer_sizes = self.kv_cache_layout.buffer_sizes.reshape(-1)
+        for base_addr, total_size in zip(base_ptrs, buffer_sizes):
+            self.store.register_memory(int(base_addr), int(total_size))
+        logger.info(f"Registered {len(base_ptrs)} KV cache memory ranges")
 
     def get_num_new_matched_tokens(
         self,

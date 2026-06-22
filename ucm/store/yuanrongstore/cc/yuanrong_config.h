@@ -21,33 +21,44 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  * */
-#ifndef UNIFIEDCACHE_STORE_CC_DS3FS_STORE_H
-#define UNIFIEDCACHE_STORE_CC_DS3FS_STORE_H
+#ifndef UNIFIEDCACHE_YUANRONG_STORE_CC_YUANRONG_CONFIG_H
+#define UNIFIEDCACHE_YUANRONG_STORE_CC_YUANRONG_CONFIG_H
 
-#include <memory>
-#include "ucmstore_v1.h"
+#include <cstdint>
+#include <string>
+#include <vector>
 
-namespace UC::Ds3fsStore {
+namespace UC {
+class StoreV1;
+}
 
-class Ds3fsStoreImpl;
-class Ds3fsStore : public StoreV1 {
-public:
-    ~Ds3fsStore() override;
-    Status Setup(const Detail::Dictionary& config) override;
-    std::string Readme() const override;
-    Expected<std::vector<uint8_t>> Lookup(const Detail::BlockId* blocks, size_t num) override;
-    Expected<ssize_t> LookupOnPrefix(const Detail::BlockId* blocks, size_t num) override;
-    void Prefetch(const Detail::BlockId* blocks, size_t num) override;
-    Expected<Detail::TaskHandle> Load(Detail::TaskDesc task) override;
-    Expected<Detail::TaskHandle> Dump(Detail::TaskDesc task) override;
-    Expected<bool> Check(Detail::TaskHandle taskId) override;
-    Status Wait(Detail::TaskHandle taskId) override;
-    Status RegisterMemory(void* base_addr, size_t total_size) override;
+namespace UC::YuanrongStore {
 
-private:
-    std::shared_ptr<Ds3fsStoreImpl> impl_;
+struct Config {
+    std::string host{"127.0.0.1"};
+    int32_t port{9088};
+    bool enableRemoteH2D{true};
+    std::vector<uint64_t> tensorSizeList{};
+
+    int32_t deviceId{-1};
+    uint32_t loadQueueDepth{524288};
+    uint32_t dumpQueueDepth{8192};
+    uint32_t hostBufPoolSize{1024};
+    size_t timeoutMs{60000};
+
+    size_t streamNumber{4};
+    std::vector<ssize_t> cpuAffinityCores{};
+
+    bool ioDirect{false};
+
+    size_t localRankSize{1};
+    std::string uniqueId{};
+    uint64_t shareBufferCapacity{64ULL << 30};
+    size_t shareBufferNumber{0};
+
+    StoreV1* storeBackend{nullptr};
 };
 
-}  // namespace UC::Ds3fsStore
+}  // namespace UC::YuanrongStore
 
 #endif

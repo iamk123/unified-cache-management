@@ -157,6 +157,9 @@ class UcmPipelineStore(UcmKVStoreBaseV1):
     def check(self, task: Task) -> bool:
         return self.store_.Check(task.task_id)
 
+    def register_memory(self, base_addr: int, total_size: int) -> None:
+        self.store_.RegisterMemory(base_addr, total_size)
+
 
 def _cache_ds3fs_pipeline_builder(
     config: Dict[str, object], pipeline: ucmpipelinestore.PipelineStore
@@ -248,6 +251,28 @@ def _cache_fake_pipeline_builder(
     pipeline.Stack("Cache", str(store_dir / "cache/libcachestore.so"), config)
 
 
+def _yuanrong_pipeline_builder(
+    config: Dict[str, object], pipeline: ucmpipelinestore.PipelineStore
+):
+    store_dir = Path(__file__).resolve().parent.parent
+    pipeline.Stack(
+        "Yuanrong", str(store_dir / "yuanrongstore/libyuanrongstore.so"), config
+    )
+
+
+def _yuanrong_posix_pipeline_builder(
+    config: Dict[str, object], pipeline: ucmpipelinestore.PipelineStore
+):
+    store_dir = Path(__file__).resolve().parent.parent
+    posix_config = copy.deepcopy(config)
+    if config.get("device_id", -1) >= 0:
+        posix_config |= {"tensor_size": config["shard_size"]}
+    pipeline.Stack("Posix", str(store_dir / "posix/libposixstore.so"), posix_config)
+    pipeline.Stack(
+        "Yuanrong", str(store_dir / "yuanrongstore/libyuanrongstore.so"), config
+    )
+
+
 UcmPipelineStoreBuilder.register("Cache|Ds3fs", _cache_ds3fs_pipeline_builder)
 UcmPipelineStoreBuilder.register("Cache|Empty", _cache_empty_pipeline_builder)
 UcmPipelineStoreBuilder.register("Cache|Posix", _cache_posix_pipeline_builder)
@@ -258,3 +283,5 @@ UcmPipelineStoreBuilder.register(
     "Cache|Compress|Posix", _build_cache_compress_posix_pipeline
 )
 UcmPipelineStoreBuilder.register("Cache|Fake", _cache_fake_pipeline_builder)
+UcmPipelineStoreBuilder.register("Yuanrong", _yuanrong_pipeline_builder)
+UcmPipelineStoreBuilder.register("Yuanrong|Posix", _yuanrong_posix_pipeline_builder)
