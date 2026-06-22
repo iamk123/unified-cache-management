@@ -183,13 +183,6 @@ public:
 
     Status Wait(Detail::TaskHandle taskId) override { return transMgr_.Wait(taskId); }
 
-    Status RegisterMemory(void* base_addr, size_t total_size) override
-    {
-        (void)base_addr;
-        (void)total_size;
-        return Status::OK();
-    }
-
 private:
     Status SetupLookupClient(const Config& config)
     {

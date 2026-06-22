@@ -1,4 +1,4 @@
-# Yuanrong HeteroClient 接入 UCM Pipeline 设计
+# YuanrongStore设计
 
 ## 1、背景与动机
 
@@ -51,15 +51,12 @@ flowchart TD
 
 ## 3、改动范围总览
 
-本设计涉及 Python connector、C++ StoreV1 插件、pybind、vLLM connector、构建脚本和测试用例六类改动：
+本设计涉及 Python pipeline、C++ StoreV1 插件、构建脚本和测试用例四类改动：
 
 | 模块 | 改动内容 | 作用 |
 | --- | --- | --- |
-| `ucm/store/yuanrongstore` | 新增 `YuanrongStore` C++ 插件，实现 `StoreV1` 的 `Setup/Lookup/LookupOnPrefix/Load/Dump/Check/Wait/RegisterMemory` 接口；内部通过 `TransManager/LoadQueue/DumpQueue/ShareLoadQueue` 等队列结构执行异步传输 | 承载 Yuanrong 主路径和 Posix fallback/archive |
+| `ucm/store/yuanrongstore` | 新增 `YuanrongStore` C++ 插件，实现 `StoreV1` 的 `Setup/Lookup/LookupOnPrefix/Load/Dump/Check/Wait` 接口；内部通过 `TransManager/LoadQueue/DumpQueue/ShareLoadQueue` 等队列结构执行异步传输 | 承载 Yuanrong 主路径和 Posix fallback/archive |
 | `ucm/store/pipeline/connector.py` | 注册 `"Yuanrong"`、`"Yuanrong|Posix"` 两个 `store_pipeline` | 让 `UcmPipelineStore` 能加载 Yuanrong 插件 |
-| `ucm/store/ucmstore_v1.h`、`ucm/store/ucmstore_v1.py` | 增加 `RegisterMemory` 统一接口 | 保持 vLLM connector 对不同 store 的统一初始化路径 |
-| `ucm/store/pipeline/cpy/pipeline_store.py.cc` | 暴露 `RegisterMemory` 到 pybind | 打通 Python `UcmPipelineStore` 到 C++ `PipelineStore` 的注册调用 |
-| `ucm/integration/vllm/ucm_connector.py` | store 创建后调用 `_register_kv_cache_memory()` | 统一触发 KV cache memory 注册；Yuanrong 的 `RegisterMemory` 为 no-op，原因是设备地址通过 `DeviceBlobList` 随每次 `MSetD2H/MGetH2D` 调用传入 |
 | `ucm/store/CMakeLists.txt`、`ucm/store/yuanrongstore/CMakeLists.txt` | 增加 YuanrongStore 构建入口和 wheel 产物定位 | 从 Python wheel 定位 `libdatasystem.so` 并构建插件 |
 | `examples/ucm_yuanrong_config.yaml`、`ucm/store/test/e2e` | 增加配置样例和 e2e | 验证 standalone、Posix fallback、多 rank 共享 miss |
 
@@ -108,7 +105,6 @@ public:
     Expected<Detail::TaskHandle> Dump(Detail::TaskDesc task) override;
     Expected<bool> Check(Detail::TaskHandle taskId) override;
     Status Wait(Detail::TaskHandle taskId) override;
-    Status RegisterMemory(void* base_addr, size_t total_size) override;
 
 private:
     Config config_;
@@ -149,7 +145,6 @@ YuanrongStore
 | `Load(TaskDesc)`              | `MGetH2D(keys, devBlobLists, failedKeys, timeout)` | Yuanrong 从 host 对象读取并 H2D 写入 UCM 提供的设备地址；miss 通过 Posix 回源 |
 | `Dump(TaskDesc)`              | `MSetD2H(keys, devBlobLists, setParam)`            | Yuanrong 从 UCM 设备地址 D2H 写入 host 对象                  |
 | `Check/Wait`                  | UCM `TaskWrapper` + queue waiter                   | 使用 `TransManager/LoadQueue/DumpQueue` 异步任务模型         |
-| `RegisterMemory`              | no-op                                              | HeteroClient 每次调用传 `DeviceBlobList{deviceIdx, Blob{ptr,size}}`，没有独立 register API，不需要预注册设备内存 |
 
 
 
@@ -225,7 +220,7 @@ class YuanrongStore : public StoreV1 { ... };
 - `Lookup/LookupOnPrefix()` 调用 `HeteroClient::Exist()` 查询 `Hex(BlockId) + "_0"`。
 - `Load/Dump()` 将 `Detail::TaskDesc` 转为 `TransTask` 后提交给 `TransManager`。
 - `Check/Wait()` 转发给 `TransManager`。
-- `RegisterMemory()` 为 no-op 并返回成功，保持与 UCM connector 通用接口兼容；Yuanrong 不维护独立的内存注册表，设备地址由每次 `MSetD2H/MGetH2D` 调用携带。
+- Yuanrong 不维护独立的设备内存注册表；`MSetD2H/MGetH2D` 每次调用都通过 `DeviceBlobList` 携带设备地址、长度和 device id。
 
 `trans_manager.h/.cc`
 
@@ -468,56 +463,6 @@ UcmPipelineStoreBuilder.register("Yuanrong|Posix", _yuanrong_posix_pipeline_buil
 `Stack` 关键顺序：先 Stack Posix（底层），再 Stack Yuanrong（顶层）。
 
 `PipelineStore.Stack()` 内部会将当前栈顶 store 通过 `config.Set("store_backend", StoreBack())` 注入给新 store。因此 YuanrongStore 在初始化时会获得 `storeBackend = PosixStore`，用于 miss 回源和 dump 归档。
-
-### StoreV1 RegisterMemory
-
-StoreV1 增加统一的内存注册接口：
-
-1. `ucm/store/ucmstore_v1.h`
-   - 增加 `virtual Status RegisterMemory(void* base_addr, size_t total_size) = 0;`
-2. 所有现有 C++ store
-   - `Cache/Empty/Fake/Posix/Ds3fs` 返回 `Status::OK()`
-   - `Compress` 转发给 backend
-3. `ucm/store/pipeline/cpy/pipeline_store.py.cc`
-   - 增加 `RegisterMemory(uintptr_t base_addr, size_t total_size)`
-   - pybind 暴露 `.def("RegisterMemory", ...)`
-4. `ucm/store/ucmstore_v1.py`
-   - 增加 abstract `register_memory`
-5. `ucm/store/pipeline/connector.py`
-   - 增加 `register_memory` 转发
-
-Yuanrong 中：
-
-```cpp
-Status RegisterMemory(void* base_addr, size_t total_size) override
-{
-    (void)base_addr;
-    (void)total_size;
-    return Status::OK();
-}
-```
-
-HeteroClient 的设备地址通过 `DeviceBlobList` 随 `MSetD2H/MGetH2D` 提交，不需要预注册。因此 Yuanrong 的 `RegisterMemory` 实现为 no-op，仅返回成功以完成统一接口闭环；对需要显式注册的 store，该调用仍然执行真实注册。
-
-### vLLM 侧改造
-
-vLLM connector 在 store 创建后执行统一的 KV cache memory 注册：
-
-```text
-ucm/integration/vllm/ucm_connector.py
-```
-
-在 store 创建后调用：
-
-```python
-self._register_kv_cache_memory()
-```
-
-Yuanrong 的 `RegisterMemory` 为 no-op，原因是：
-
-1. `MSetD2H/MGetH2D` 每次调用都会携带 `DeviceBlobList{deviceIdx, Blob{ptr,size}}`。
-2. HeteroClient 没有独立的 register API，也不依赖预注册后的 buffer handle。
-3. UCM connector 保持统一调用路径，对需要显式注册的 store 仍然执行真实注册。
 
 ## 6、Load/Dump 详细流程
 
@@ -828,10 +773,6 @@ config["share_buffer_capacity_gb"] = 64
    - 首期采用 `LoadQueue/DumpQueue/ShareLoadQueue` 结构实现，复杂度高于同步薄封装。
    - 好处是 `Yuanrong|Posix` 的归档、miss 回源、多 rank 共享 miss、事件同步、host buffer 生命周期都在 queue 内闭环，避免后续再推翻实现。
 
-5. **RegisterMemory 对 Yuanrong 是 no-op**
-   - 保留接口用于兼容 vLLM connector 的统一调用路径。
-   - YuanrongStore 不维护注册表，也不伪造不存在的 register 语义；设备地址在每次 `MSetD2H/MGetH2D` 调用中通过 `DeviceBlobList` 传入。
-
-6. **fallback 语义要明确**
+5. **fallback 语义要明确**
    - `Yuanrong` standalone miss 结束当前 Load，不写入 `failureSet`，由上层重算。
    - `Yuanrong|Posix` miss 尝试 backend。
