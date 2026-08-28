@@ -41,6 +41,7 @@ Status BackfillQueue::Setup(const Config& config, std::shared_ptr<datasystem::KV
     config_ = config;
     kvClient_ = std::move(kvClient);
     queueDepth_ = config.backfillQueueDepth;
+    if (config.backfillWorkerCount == 0) { return Status::OK(); }
     try {
         workers_.reserve(config.backfillWorkerCount);
         for (size_t i = 0; i < config.backfillWorkerCount; ++i) {
@@ -50,12 +51,20 @@ Status BackfillQueue::Setup(const Config& config, std::shared_ptr<datasystem::KV
         Close();
         return Status::Error(fmt::format("failed to start YuanRong backfill worker: {}", e.what()));
     }
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        enabled_ = true;
+    }
     return Status::OK();
 }
 
 bool BackfillQueue::Submit(BackfillTask task)
 {
     std::lock_guard<std::mutex> lock(mutex_);
+    if (!enabled_) {
+        UC_DEBUG("YuanRong backfill disabled, dropping ({} keys).", task.keys.size());
+        return false;
+    }
     if (stop_ || waiting_.size() >= queueDepth_) {
         UC_WARN("YuanRong backfill queue full, dropping ({} keys).", task.keys.size());
         return false;
@@ -70,6 +79,7 @@ void BackfillQueue::Close()
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (stop_) { return; }
+        enabled_ = false;
         stop_ = true;
         cv_.notify_all();
     }

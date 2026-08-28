@@ -136,8 +136,7 @@ inline size_t DeriveYuanRongHostBufferCount(size_t objectSize, size_t recoveryBa
                                             size_t loadWorkerCount, size_t backfillWorkerCount,
                                             uint64_t capacityBytes)
 {
-    if (objectSize == 0 || recoveryBatchSize == 0 || loadWorkerCount == 0 ||
-        backfillWorkerCount == 0 || capacityBytes == 0) {
+    if (objectSize == 0 || recoveryBatchSize == 0 || loadWorkerCount == 0 || capacityBytes == 0) {
         return 0;
     }
 

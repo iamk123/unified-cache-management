@@ -23,6 +23,7 @@ ucm_connectors:
       # Posix cold recovery pipeline batch size.
       yuanrong_recovery_batch_size: 32
       yuanrong_h2d_stream_count: 4
+      # Set to 0 to disable backfill from Posix to YuanRong.
       yuanrong_backfill_worker_count: 1
       yuanrong_backfill_queue_depth: 128
       # Maximum YuanRong buffers held by Posix per UCM process.

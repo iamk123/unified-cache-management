@@ -437,11 +437,7 @@ private:
             if (config.recoveryBatchSize == 0) {
                 return Status::InvalidParam("yuanrong_recovery_batch_size must be greater than 0");
             }
-            if (config.backfillWorkerCount == 0) {
-                return Status::InvalidParam(
-                    "yuanrong_backfill_worker_count must be greater than 0");
-            }
-            if (config.backfillQueueDepth == 0) {
+            if (config.backfillWorkerCount > 0 && config.backfillQueueDepth == 0) {
                 return Status::InvalidParam("yuanrong_backfill_queue_depth must be greater than 0");
             }
             if (!config.hostBufferCountExplicit &&
@@ -504,6 +500,7 @@ private:
                      : (config.hostBufferCountExplicit ? "explicit" : "derived"));
         UC_DEBUG("{}::HostBufferCapacityGb = {}", name, config.hostBufferCapacityGb);
         UC_DEBUG("{}::H2DStreamCount = {}", name, config.h2dStreamCount);
+        UC_DEBUG("{}::BackfillEnabled = {}", name, config.backfillWorkerCount > 0);
         UC_DEBUG("{}::BackfillWorkerCount = {}", name, config.backfillWorkerCount);
         UC_DEBUG("{}::BackfillQueueDepth = {}", name, config.backfillQueueDepth);
         const auto posixDumpBatchBytes = config.objectSize * config.posixDumpBatchSize;

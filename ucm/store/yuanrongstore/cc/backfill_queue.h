@@ -57,6 +57,7 @@ private:
     Config config_;
     std::shared_ptr<datasystem::KVClient> kvClient_;
     size_t queueDepth_{0};
+    bool enabled_{false};
     bool stop_{false};
     std::mutex mutex_;
     std::condition_variable cv_;

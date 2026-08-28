@@ -26,6 +26,7 @@
 #include <gtest/gtest.h>
 #include <string>
 #include <vector>
+#include "backfill_queue.h"
 #include "yuanrong_helper.h"
 
 namespace {
@@ -48,6 +49,8 @@ TEST(YuanRongConfigTest, UsesConservativeDefaults)
     EXPECT_EQ(config.port, 0);
     EXPECT_EQ(config.dumpPrerequisiteWorkerCount, 2);
     EXPECT_EQ(config.memoryAlignment, UC::YuanRongStore::kDefaultMemoryAlignment);
+    EXPECT_EQ(config.backfillWorkerCount, 1);
+    EXPECT_EQ(config.backfillQueueDepth, 128);
     EXPECT_EQ(config.posixDumpBatchSize, 0);
     EXPECT_EQ(config.posixMaxInflightGb, 1);
 }
@@ -339,6 +342,34 @@ TEST(YuanRongHelperTest, HostBufferCountUsesPipelineConcurrencyAndCompleteBatche
     constexpr uint64_t capacityBytes = 8ULL << 30;
     EXPECT_EQ(DeriveYuanRongHostBufferCount(4ULL << 20, 32, 4, 1, capacityBytes), 288);
     EXPECT_EQ(DeriveYuanRongHostBufferCount(64ULL << 20, 32, 4, 1, capacityBytes), 128);
+}
+
+TEST(YuanRongHelperTest, HostBufferCountSupportsDisabledBackfill)
+{
+    using namespace UC::YuanRongStore;
+
+    constexpr uint64_t capacityBytes = 8ULL << 30;
+    EXPECT_EQ(DeriveYuanRongHostBufferCount(4ULL << 20, 32, 4, 0, capacityBytes), 256);
+    EXPECT_EQ(DeriveYuanRongHostBufferCount(64ULL << 20, 32, 4, 0, capacityBytes), 128);
+}
+
+TEST(YuanRongBackfillQueueTest, DisabledQueueRejectsTaskAndReleasesBuffers)
+{
+    using namespace UC::YuanRongStore;
+
+    Config config;
+    config.backfillWorkerCount = 0;
+    config.backfillQueueDepth = 0;
+    BackfillQueue queue;
+    ASSERT_TRUE(queue.Setup(config, nullptr).Success());
+
+    auto buffer = std::make_shared<int>(42);
+    std::weak_ptr<int> weakBuffer = buffer;
+    std::vector<std::shared_ptr<void>> buffers{buffer};
+    buffer.reset();
+
+    EXPECT_FALSE(queue.Submit(BackfillTask{{"key"}, std::move(buffers)}));
+    EXPECT_TRUE(weakBuffer.expired());
 }
 
 TEST(YuanRongHelperTest, HostBufferCountRejectsCapacitySmallerThanOneBatch)

@@ -59,8 +59,12 @@ Status LoadQueue::Setup(const Config& config, TaskIdSet* failureSet,
             hostBufferPool_.Setup(config.deviceId, static_cast<uint32_t>(config.hostBufferCount),
                                   config.objectSize, config.ioDirect);
         if (status.Failure()) { return status; }
-        status = backfillQueue_.Setup(config, kvClient_);
-        if (status.Failure()) { return status; }
+        if (config.backfillWorkerCount > 0) {
+            status = backfillQueue_.Setup(config, kvClient_);
+            if (status.Failure()) { return status; }
+        } else {
+            UC_DEBUG("YuanRong backfill disabled.");
+        }
     }
     dispatcher_ = std::thread{&LoadQueue::DispatchStage, this};
     std::vector<std::promise<Status>> started(config.loadWorkerCount);
@@ -427,8 +431,12 @@ Status LoadQueue::FinalizeHostBatch(CopyStream& stream,
     UC_DEBUG("YuanRong host batch({}) Posix wait {:.3f}ms, direct H2D {:.3f}ms.",
              batch.indexes.size(), (h2dStart - waitStart) * 1e3, (h2dEnd - h2dStart) * 1e3);
 
-    backfillQueue_.Submit(BackfillTask{std::move(batch.keys), std::move(batch.hostBuffers)});
-    UC_DEBUG("YuanRong host batch({}) async backfill submitted.", batch.indexes.size());
+    if (config_.backfillWorkerCount > 0) {
+        backfillQueue_.Submit(BackfillTask{std::move(batch.keys), std::move(batch.hostBuffers)});
+        UC_DEBUG("YuanRong host batch({}) async backfill submitted.", batch.indexes.size());
+    } else {
+        batch.hostBuffers.clear();
+    }
     return Status::OK();
 }
 

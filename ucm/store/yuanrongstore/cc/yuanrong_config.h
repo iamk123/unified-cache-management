@@ -58,7 +58,7 @@ struct Config {
     size_t hostBufferCapacityGb{8};
     bool hostBufferCountExplicit{false};
     size_t h2dStreamCount{4};
-    size_t backfillWorkerCount{1};
+    size_t backfillWorkerCount{1};  // Zero disables backfill from Posix to YuanRong.
     size_t backfillQueueDepth{128};
     size_t posixDumpBatchSize{0};
     size_t posixMaxInflightGb{1};
