@@ -29,6 +29,7 @@
 #include <mutex>
 #include <numeric>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 #include "datasystem/hetero_client.h"
@@ -479,33 +480,42 @@ private:
         return Status::OK();
     }
 
+    static std::string EscapeJsonString(std::string_view value)
+    {
+        constexpr char hex[] = "0123456789abcdef";
+        std::string escaped;
+        escaped.reserve(value.size());
+        for (const auto ch : value) {
+            const auto byte = static_cast<unsigned char>(ch);
+            switch (ch) {
+                case '\"': escaped += "\\\""; break;
+                case '\\': escaped += "\\\\"; break;
+                case '\b': escaped += "\\b"; break;
+                case '\f': escaped += "\\f"; break;
+                case '\n': escaped += "\\n"; break;
+                case '\r': escaped += "\\r"; break;
+                case '\t': escaped += "\\t"; break;
+                default:
+                    if (byte < 0x20) {
+                        escaped += "\\u00";
+                        escaped += hex[byte >> 4];
+                        escaped += hex[byte & 0x0f];
+                    } else {
+                        escaped += ch;
+                    }
+            }
+        }
+        return escaped;
+    }
+
     static void ShowConfig(const Config& config)
     {
-        constexpr const char* name = "YuanRongStore";
-        UC_DEBUG("{}::Host = {}", name, config.host);
-        UC_DEBUG("{}::Port = {}", name, config.port);
-        UC_DEBUG("{}::Namespace = {}", name, config.nameSpace);
-        UC_DEBUG("{}::EnableRemoteH2D = {}", name, config.enableRemoteH2D);
-        UC_DEBUG("{}::DeviceMemoryPreRegistration = {}", name,
-                 config.enableDeviceMemoryPreRegistration);
-        UC_DEBUG("{}::DeviceId = {}", name, config.deviceId);
-        UC_DEBUG("{}::ObjectSize = {}", name, config.objectSize);
-        UC_DEBUG("{}::MemoryAlignment = {}", name, config.memoryAlignment);
-        UC_DEBUG("{}::IoDirect = {}", name, config.ioDirect);
-        UC_DEBUG("{}::PosixIoEngine = {}", name, config.posixIoEngine);
-        UC_DEBUG("{}::TimeoutMs = {}", name, config.timeoutMs);
-        UC_DEBUG("{}::LoadWorkerCount = {}", name, config.loadWorkerCount);
-        UC_DEBUG("{}::DumpPrerequisiteWorkerCount = {}", name, config.dumpPrerequisiteWorkerCount);
-        UC_DEBUG("{}::RecoveryBatchSize = {}", name, config.recoveryBatchSize);
-        UC_DEBUG("{}::HostBufferCount = {}", name, config.hostBufferCount);
-        UC_DEBUG("{}::HostBufferCountSource = {}", name,
-                 config.deviceId < 0 || config.storeBackend == nullptr
-                     ? "disabled"
-                     : (config.hostBufferCountExplicit ? "explicit" : "derived"));
-        UC_DEBUG("{}::HostBufferCapacityGb = {}", name, config.hostBufferCapacityGb);
-        UC_DEBUG("{}::H2DStreamCount = {}", name, config.h2dStreamCount);
-        UC_DEBUG("{}::BackfillWorkerCount = {}", name, config.backfillWorkerCount);
-        UC_DEBUG("{}::BackfillQueueDepth = {}", name, config.backfillQueueDepth);
+        constexpr double bytesPerGib = 1024.0 * 1024.0 * 1024.0;
+        const auto hostBufferPoolBytes = config.objectSize * config.hostBufferCount;
+        const auto hostBufferCountSource =
+            config.deviceId < 0 || config.storeBackend == nullptr
+                ? "disabled"
+                : (config.hostBufferCountExplicit ? "explicit" : "derived");
         const auto posixDumpBatchBytes = config.objectSize * config.posixDumpBatchSize;
         const auto maxInflightBytes =
             config.posixMaxInflightGb <= (std::numeric_limits<size_t>::max() >> 30)
@@ -513,13 +523,32 @@ private:
                 : 0;
         const auto maxInflightBatches =
             posixDumpBatchBytes == 0 ? 0 : maxInflightBytes / posixDumpBatchBytes;
-        UC_DEBUG("{}::PersistenceQueueDepth = {}", name, kPersistenceQueueDepth);
-        UC_DEBUG("{}::PosixDumpBatchSize = {}", name, config.posixDumpBatchSize);
-        UC_DEBUG("{}::PosixDumpBatchBytes = {}", name, posixDumpBatchBytes);
-        UC_DEBUG("{}::PosixMaxInflightGb = {}", name, config.posixMaxInflightGb);
-        UC_DEBUG("{}::PosixMaxInflightBatches = {}", name, maxInflightBatches);
-        UC_DEBUG("{}::StoreBackend = {}", name,
-                 config.storeBackend ? config.storeBackend->Readme() : "none");
+        const auto storeBackend =
+            config.storeBackend ? config.storeBackend->Readme() : std::string{"none"};
+        UC_INFO(
+            "{{\"store\":\"YuanRongStore\",\"host\":\"{}\",\"port\":{},"
+            "\"namespace\":\"{}\",\"enable_remote_h2d\":{},"
+            "\"device_memory_pre_registration\":{},\"device_id\":{},"
+            "\"object_size_bytes\":{},\"memory_alignment\":{},\"io_direct\":{},"
+            "\"posix_io_engine\":\"{}\",\"timeout_ms\":{},\"load_worker_count\":{},"
+            "\"dump_prerequisite_worker_count\":{},\"recovery_batch_size\":{},"
+            "\"host_buffer_count\":{},\"host_buffer_count_source\":\"{}\","
+            "\"host_buffer_capacity_gb\":{},\"host_buffer_pool_size_bytes\":{},"
+            "\"host_buffer_pool_size_gib\":{:.3f},\"h2d_stream_count\":{},"
+            "\"backfill_worker_count\":{},\"backfill_queue_depth\":{},"
+            "\"persistence_queue_depth\":{},\"posix_dump_batch_size\":{},"
+            "\"posix_dump_batch_bytes\":{},\"posix_max_inflight_gb\":{},"
+            "\"posix_max_inflight_batches\":{},\"store_backend\":\"{}\"}}",
+            EscapeJsonString(config.host), config.port, EscapeJsonString(config.nameSpace),
+            config.enableRemoteH2D, config.enableDeviceMemoryPreRegistration, config.deviceId,
+            config.objectSize, config.memoryAlignment, config.ioDirect,
+            EscapeJsonString(config.posixIoEngine), config.timeoutMs, config.loadWorkerCount,
+            config.dumpPrerequisiteWorkerCount, config.recoveryBatchSize, config.hostBufferCount,
+            hostBufferCountSource, config.hostBufferCapacityGb, hostBufferPoolBytes,
+            static_cast<double>(hostBufferPoolBytes) / bytesPerGib, config.h2dStreamCount,
+            config.backfillWorkerCount, config.backfillQueueDepth, kPersistenceQueueDepth,
+            config.posixDumpBatchSize, posixDumpBatchBytes, config.posixMaxInflightGb,
+            maxInflightBatches, EscapeJsonString(storeBackend));
     }
 };
 
